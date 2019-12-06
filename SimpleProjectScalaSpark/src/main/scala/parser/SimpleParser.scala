@@ -11,11 +11,9 @@ class SimpleParser extends RegexParsers {
 
   def anySymbols: Parser[String] = "[0-9a-zA-Zа-яА-ЯЁё_><=]+".r //^^ (_ => "index=") //cases expression with index
 
-  def `index=log`= `index` ~> commonSimpleString ^^ (_.toString)
+  def `index=log` = `index` ~> commonSimpleString ^^ (_.toString)
 
   def repBoolAndString = booleanExpression ~ commonSimpleString.?
-
-  def GETORPOST: Parser[String] = "[GET][POST]".r
 
   def anySentence = ".+".r ^^ (_.toString)
 
@@ -23,72 +21,111 @@ class SimpleParser extends RegexParsers {
 
   def anyWithoutBool = "[^NOT|OR|AND]+".r ^^ (_.toString)
 
-  lazy val booleanExpression = "NOT|OR|AND".r //^^ (_.toString)
-
   def commonSimpleString = "\\S+\\s?".r ^^ (_.toString)
 
   def bracketRight = "\\(".r ^^ (_.toString)
 
   def bracketLeft = "\\)".r ^^ (_.toString)
- 
-  var listSimpleParserExpression = List[Parser[String]](`index`, `any[=><]`, anySymbols, `index=log`, GETORPOST, booleanExpression)
-  var bufferIndexLogs = mutable.Buffer[String]()
+
+  // var listSimpleParserExpression = List[Parser[String]](`index`, `any[=><]`, anySymbols, `index=log`, GETORPOST, booleanExpression)
+  var bufferPreRez = mutable.Buffer[String]()
+  var bufferIndexLog = mutable.Buffer[String]()
+  var bufferOtherSentence = mutable.Buffer[String]()
   var resBuffer = mutable.Buffer[String]()
   var bufferSimpleStringsBool = mutable.Buffer[String]()
   var bufferStringsBool = mutable.Buffer[String]()
 
   def repRezSentence = rep1(commonSimpleString)
-/*
-  def successVal(param: Parser[String], str: String) = {
-    val parser = parseHelper(commonSent(param), str)
-    if ( parser != "") parser else ""
-  }
 
- */
-  def regMatcher(value: String) : String = value match {
-    case booleanExpression() => if (value == "NOT") s"!(" else value.trim
-    case booleanExpression() => if (value == "NOT") s"!(" else value.trim
+  lazy val GETORPOST = "GET|POST".r
+
+  lazy val booleanExpression = "NOT|OR|AND".r //^^ (_.toString)
+
+  lazy val compareSymbols = "=><".r //^^ (_.toString)
+
+  lazy val `indexAny` = "index|index[0-9a-zA-Zа-яА-ЯЁё_><=]+".r //^^ (_.toString)
+
+  lazy val `indexOne` = "index".r //^^ (_.toString)
+
+  var i = 0
+
+  var j = 0
+  /*
+    def worker(str: String) = {
+      val mass = str.split(" ")
+      mass.foreach{
+        case str@ (`index` | `indexAny`()) => s" $str"
+        case boolValue@ booleanExpression() => if (boolValue == "NOT") s" !(" else s" ${boolValue}"
+        case boolValue@ compareSymbols() => s"${boolValue.trim}"
+      }
+
+    }
+
+   */
+
+  def regFirstPreMatcher(value: String): String = value match {
+    case booleanExpression() => if (value == "NOT") s" !(" else s" ${value}"
+    //case compareSymbols() => s"${value.trim}"
+    case `indexAny`() => s" ${value}"
+    case GETORPOST() => s"'_raw like \\'%${value.trim}%\\'"
+    case str => {
+      i += 1
+      s"${str.trim}"
+    }
   }
 
   def commonSentence = rep1(commonSimpleString) ^^ {
     listSentence =>
       listSentence.foreach { value =>
-        //successVal(booleanExpression, value)
-        /*
-        val sar = if (value == "NOT") {
-          s"!("
-        } else value.trim
-        value match {
-          case booleanExpression() => if (value == "NOT") s"!(" else value.trim
-          case booleanExpression() => if (value == "NOT") s"!(" else value.trim
-        }
-        val sar = regMatcher(value)
-        if (sar != "") bufferIndexLogs += sar
-        */
-        println(bufferIndexLogs.mkString(""))
-        println(bufferIndexLogs.size)
-        IndexApacheLog(bufferIndexLogs, bufferSimpleStringsBool.map(_.trim).mkString(" ")) //.toString//.mkString(" ").toString
+        val sar = regFirstPreMatcher(value.trim)
+        bufferPreRez += sar
       }
+      bufferPreRez.mkString("").split(" ").foreach {
+        case str@`indexAny`() => {
+          val res = this.parseHelper(indexParser, str)
+          if (res != "") bufferIndexLog += res
+        }
+        case str => bufferOtherSentence += str.trim
+      }
+      println(i) //.split(" ").mkString(" "))
+      println(bufferPreRez.mkString("")) //.split(" ").mkString(" "))
+      //println(bufferPreRez.size) //.split(" ").mkString(" "))
+      //println(bufferOtherSentence.mkString(" ")) //.split(" ").mkString(" "))
+      println(bufferIndexLog.mkString(" ")) //.split(" ").mkString(" "))
+      println(bufferIndexLog.size) //.split(" ").mkString(" "))
+      //println(bufferOtherSentence.size) //.split(" ").mkString(" "))
+
+      IndexApacheLog(bufferIndexLog, bufferOtherSentence.map(_.trim).mkString(" ")) //.toString//.mkString(" ").toString
   }
 
   def commonSent(parserString: Parser[String]) = parserString ^^ (anyExpression => ParserHelper(anyExpression.toString))
 
-  case class IndexApacheLog( bufferIndexLogs: mutable.Buffer[String], groupCol: String) {
+  def indexParser = `index` ~> anySymbols ^^ (anyExpression => ParserHelper(anyExpression.toString))
+
+  case class IndexApacheLog(bufferIndexLogs: mutable.Buffer[String], groupCol: String) {
     val apBuffer = bufferIndexLogs.map(_.stripPrefix("\"").stripSuffix("\""))
     val gColl = groupCol.trim
     val grColl = if (gColl.trim != "GET") gColl else s"_raw like \\\'%$gColl%\\\'"
-    override def toString: String = apBuffer.map(ap =>  s"```{'$ap' : { 'query': '$grColl', tws: 0, twf: 0}}```").mkString(",")
+
+    override def toString: String = apBuffer.map(ap => s"```{'$ap' : { 'query': '$grColl', tws: 0, twf: 0}}```").mkString(",")
   }
 
   case class ParserHelper(str: String) {
     override def toString: String = s"$str"
   }
 
+  /**
+   * This method a compared res and st, if it is equal => return Success
+   *
+   * @param res
+   * @param str
+   * @return
+   */
   def parseHelper(res: Parser[ParserHelper], str: String): String = {
     parse(res, str) match {
       case Success(matched, _) => matched.toString
-      case Failure(_ , _) => s""
-      case Error(_ , _) => s""
+      case Failure(_, _) => s""
+      case Error(_, _) => s""
     }
   }
 
@@ -103,7 +140,7 @@ class SimpleParser extends RegexParsers {
 
 object SimpleParser {
   def main(args: Array[String]): Unit = {
-    val  str  = "index = test AND dgg"
+    val str = "index= test index = test1 NOT AND ( dgg ) GET"
     val simpleParser = new SimpleParser
     println(simpleParser.parseResult(simpleParser.commonSentence, str))
   }

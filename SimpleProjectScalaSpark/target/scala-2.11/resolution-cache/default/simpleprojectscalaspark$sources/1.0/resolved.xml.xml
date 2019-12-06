@@ -4,7 +4,7 @@
 		module="simpleprojectscalaspark$sources"
 		revision="1.0"
 		status="integration"
-		publication="20191125113143"
+		publication="20191205202312"
 	/>
 	<configurations>
 		<conf name="compile" visibility="public" description=""/>
