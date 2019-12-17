@@ -8,43 +8,21 @@ class SimpleParser extends RegexParsers {
   var bufferPreRez = mutable.Buffer[String]()
   var bufferIndexLog = mutable.Buffer[String]()
   var bufferOtherSentence = mutable.Buffer[String]()
-  var resBuffer = mutable.Buffer[String]()
-  var bufferSimpleStringsBool = mutable.Buffer[String]()
-  var bufferStringsBool = mutable.Buffer[String]()
 
   //terminals  [\s]$
   //Block defs for index expressions
   //Group phrases for indexExpression
-  def `commonNumberChars` = "\\S+".r ^^ (_.toString)
-
-  def `index=log` = `index` ~> `commonNumberChars` ^^ (_.toString)
-
-  //def `colWith?Brackets` = `commonNumberChars` ~ `commonNumberChars` ^^ (_.toString)
-
-  def `anyWithoutBrackets` = "[^\"\']+".r ^^ (_.toString)
+  def `anyWithoutGap` = "\\S+".r ^^ (_.toString)
 
   def `anyWithCompare` = "\\S+\\s?[=<>]".r ^^ (_.toString)
 
-  def `anyWithCompareAndAnyWithOrWithoutBrackets` = `anyWithCompare` ~ "\"\'".r ~ `anyWithoutBrackets` ~ "\"\'".r ^^ {
-    case col ~ br ~ body ~ bra => {
-      val tempStr = s"'${col}\'${body}\''"
-      bufferIndexLog += tempStr
-      tempStr
-    }
-  }
+  def `anyWithoutBrackets` = "[^\"\']+".r ^^ (_.toString)
 
-  def `universalThreeSentence`: Parser[String] = "\\S+\\s?[=<>]\\s?[\"\']?\\S+".r ^^ { str => {
-    parse(`index=log`, str) match {
-      case Success(result, _) => {
-        bufferIndexLog += result
-        result
-      }
-      case failure: NoSuccess => scala.sys.error(failure.msg)
-    }
-  }}
-  //def `colWithoutBrackets` = "\\S+\\s?[=<>]".r ~ "\"\'".r ~ "[^\"\']".r ~ "\"\'".r ^^ (_.toString)
+  def `anyWithoutBracketsAndGap` = "[^\"\'\\s]+".r ^^ (_.toString)
 
   def `index`: Parser[String] = "index\\s?=".r //^^ (_ => "index=") //cases expression with index
+
+  def `index=log` = `index` ~> `anyWithoutGap` ^^ (_.toString)
 
   def `indexUniversal`: Parser[String] = "index\\s?=\\s?\\S+".r ^^ { str => {
     parse(`index=log`, str) match {
@@ -56,18 +34,16 @@ class SimpleParser extends RegexParsers {
     }
   }}
 
-  def `colUniversal`: Parser[String] = "\\S+\\s?=\\s?\\S+".r ^^ { str => {
-    parse(`index=log`, str) match {
-      case Success(result, _) => {
-        bufferIndexLog += result
-        result
-      }
-      case failure: NoSuccess => scala.sys.error(failure.msg)
-    }
-  }}
-
   //cases expression with other simple expressions
-  def `anySentenceForSeqParser` = "\\S+".r ^^ (str => {
+  def `anySentenceWithBrackets` = "\"".r ~ "[^\\\"\\']+".r ~ "\"".r ^^ {
+    case br1 ~ str ~ br2 => str
+  }
+
+  def `anyWithCompareWithBracketsSentence` = `anyWithCompare` ~ `anySentenceWithBrackets` ^^ {
+    case withCompare ~ anySent => s"$withCompare\\\'$anySent\\\'"
+  }
+
+  def `anySentenceForOtherSeqSentence` = "\\S+".r ^^ (str => {
     val tempValue = if (str == "NOT") {
       s"!("
     }
@@ -79,13 +55,12 @@ class SimpleParser extends RegexParsers {
     str
   })
 
+
   //`anySeqString` |
   def commonSentenceParser =
-    `indexUniversal` |
-      `anyWithCompareAndAnyWithOrWithoutBrackets` |
-      `anySentenceForSeqParser`
-  /*  ____________________________________________________________  */
-  //Parsers for every phrases
+  `indexUniversal` |
+  `anySentenceForOtherSeqSentence`
+  // | `anySentenceForOtherSeq`
 
   def commonSentence = rep1(commonSentenceParser) ^^ {
     listSentence => //listSentence//.foreach { println(_) }
@@ -111,12 +86,12 @@ class SimpleParser extends RegexParsers {
       IndexApacheLog(bufferIndexLog, resBufferOtherSentence) //.toString//.mkString(" ").toString
   }
 
+  /*  ____________________________________________________________  */
+  //Parsers for every phrases
+
   case class IndexApacheLog(bufferIndexLogs: mutable.Buffer[String], groupCol: String) {
     val apBuffer = bufferIndexLogs.map(_.stripPrefix("\"").stripSuffix("\""))
-    val gColl = groupCol.trim
-    val grColl = if (gColl.trim != "GET") gColl else s"_raw like \\\'%$gColl%\\\'"
-
-    override def toString: String = apBuffer.map(ap => s"```{'$ap' : { 'query': '$grColl', tws: 0, twf: 0}}```").mkString(",")
+    override def toString: String = apBuffer.map(ap => s"```{'$ap' : { 'query': '$groupCol', tws: 0, twf: 0}}```").mkString(",")
   }
 
   case class ParserHelper(str: String) {
@@ -140,7 +115,7 @@ class SimpleParser extends RegexParsers {
 
 object SimpleParser {
   def main(args: Array[String]): Unit = {
-    val str = "index=test GET POST"
+    val str = "index=test GET POST col=\"20 ffgg jkm\""
     val simpleParser = new SimpleParser
     println(simpleParser.parseResult(simpleParser.commonSentence, str))
   }
