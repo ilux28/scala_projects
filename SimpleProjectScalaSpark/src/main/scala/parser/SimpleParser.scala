@@ -12,17 +12,13 @@ class SimpleParser extends RegexParsers {
   //terminals  [\s]$
   //Block defs for index expressions
   //Group phrases for indexExpression
-  def `anyWithoutGap` = "\\S+".r ^^ (_.toString)
+  def `anySentenceWithoutGap` = """\S+""".r ^^ (_.toString)
 
   def `anyWithCompare` = "\\S+\\s?[=<>]".r ^^ (_.toString)
 
-  def `anyWithoutBrackets` = "[^\"\']+".r ^^ (_.toString)
-
-  def `anyWithoutBracketsAndGap` = "[^\"\'\\s]+".r ^^ (_.toString)
-
   def `index`: Parser[String] = "index\\s?=".r //^^ (_ => "index=") //cases expression with index
 
-  def `index=log` = `index` ~> `anyWithoutGap` ^^ (_.toString)
+  def `index=log` = `index` ~> `anySentenceWithoutGap` ^^ (_.toString)
 
   def `indexUniversal`: Parser[String] = "index\\s?=\\s?\\S+".r ^^ { str => {
     parse(`index=log`, str) match {
@@ -34,35 +30,88 @@ class SimpleParser extends RegexParsers {
     }
   }}
 
-  //cases expression with other simple expressions
-  def `anySentenceWithBrackets` = "\"".r ~ "[^\\\"\\']+".r ~ "\"".r ^^ {
-    case br1 ~ str ~ br2 => str
+  def `anySentenceWithBrackets` = "[\'\"]".r.? ~ rep1(`anySentenceWithoutGap`) ~ "[\'\"]".r.? ^^ {
+    case br1 ~ listSent ~ br2 =>  {
+      val strRes = if (br1.fold("")(str => str.toString) != "" && br2.fold("")(str => str.toString) != "") {
+        listSent.mkString(" ").replaceAll(""""'""", """\'""")
+      } else listSent.mkString(" ")//.replaceAll(""""'""", """\'""")
+      bufferOtherSentence += strRes
+      strRes
+    }
   }
 
-  def `anyWithCompareWithBracketsSentence` = `anyWithCompare` ~ `anySentenceWithBrackets` ^^ {
-    case withCompare ~ anySent => s"$withCompare\\\'$anySent\\\'"
+  /**
+   *  New Functional
+   * @return
+   */
+  //Boolean expressions
+  def `anyBooleanSentence` = "AND|OR|NOT".r ^^ { str => {
+    val strRes = if (str == "NOT") s"!(" else str
+    bufferOtherSentence += strRes
+    strRes
+  } }
+
+  def `anyRequests` = "\\*?G\\*?E\\*?T\\*?+|\\*?P\\*?O\\*?S\\*?T\\*?+".r ^^ { str => {
+    val strRequest = if (str.contains("\\*")) {
+      val tempStr = str.replaceAll("""\*""", """.*""")
+      s"_raw rlike \'$tempStr\'"
+    } else s"_raw like \'%$str%\'"
+    bufferOtherSentence += strRequest
+    strRequest
+  } }
+
+  def `commonColWithCompare` = """\S+\s?[=<>]""".r ^^ (_.toString)
+
+  def `sentenceInnerBrackets` = `sentenceInnerBracketsBasic` ^^ { str => {
+   val tempStr = s"_raw like \'%$str%\'"//{str.substring(1, str.size - 2)}%\'"
+    bufferOtherSentence += tempStr
+    tempStr
+  }  }
+
+  def `sentenceInnerBracketsBasic` = """"|'""".r ~ rep1(`anySentenceWithoutGap`) ~ """"|'""".r  ^^ {
+    case br1 ~ listSent ~ br2 => listSent.mkString(" ")
   }
 
-  def `anySentenceForOtherSeqSentence` = "\\S+".r ^^ (str => {
-    val tempValue = if (str == "NOT") {
-      s"!("
+  def `colWithCompareWithBrackets` = `commonColWithCompare` ~ `sentenceInnerBracketsBasic` ^^ {
+    case col ~ innerBr => {
+      val resStr = if (innerBr.contains("""\*""")) {
+        s"$col'${innerBr.replaceAll("""\*""", """.*""")}'"
+      } else if (innerBr.contains("""*""")) {
+        s"${col.substring(0, col.size - 1)} rlike \'${innerBr.replaceAll("""\\\*""", """*""")}\'"
+      } else s"$col\'$innerBr\'"
+      bufferOtherSentence += resStr
+      resStr
     }
-    else if (str == "GET" || str == "POST") {
-      s"_raw like \\\'%$str%\\\'"
+  }
+
+  def `colWithCompareWithoutBrackets` = `commonColWithCompare` ~ `anySentenceWithoutGap` ^^ {
+    case col ~ withoutBr => {
+      val resStr = s"$col${withoutBr.replaceAll(""""|'""", """\\'""")}"
+      bufferOtherSentence += resStr
+      resStr
     }
-    else s"$str"
-    bufferOtherSentence += tempValue
+  }
+
+  def `simpleSentenceWithoutGap` = `anySentenceWithoutGap` ^^ (str => {
+    bufferOtherSentence += s"$str"
     str
   })
 
+  def `universalSentence` =
+    `indexUniversal` |
+      `anyBooleanSentence` |
+      `anyRequests` |
+      `sentenceInnerBrackets` |
+      `colWithCompareWithBrackets` |
+      `colWithCompareWithoutBrackets` |
+      `simpleSentenceWithoutGap`
 
-  //`anySeqString` |
-  def commonSentenceParser =
-  `indexUniversal` |
-  `anySentenceForOtherSeqSentence`
-  // | `anySentenceForOtherSeq`
+  /***
+   *
+   * @return
+   */
 
-  def commonSentence = rep1(commonSentenceParser) ^^ {
+  def commonSentenceTwoVariant = rep1(`universalSentence`) ^^ {
     listSentence => //listSentence//.foreach { println(_) }
       var i = -1
       for (x <- bufferOtherSentence.indices) {
@@ -73,19 +122,17 @@ class SimpleParser extends RegexParsers {
             bufferOtherSentence(x + 1) = s"!(${bufferOtherSentence(x + 1)})"
           }
           i = x
-        } else if ((bufferOtherSentence(x).contains("GET") || bufferOtherSentence(x).contains("POST")) && x != 0) {
+        } else if (bufferOtherSentence(x).contains("_raw")) {
           if (bufferOtherSentence(x - 1) != "AND" && bufferOtherSentence(x - 1) != "OR") bufferOtherSentence(x) = s"AND ${bufferOtherSentence(x)}"
         }
       }
       if (i != -1) bufferOtherSentence.remove(i)
-      //bufferOtherSentence.map(_.replaceAll("\"", "\\\'"))
       println(bufferIndexLog.mkString(" "))
       println(bufferOtherSentence.mkString(" "))
       println(bufferOtherSentence.mkString("").split("").size) //.split(" ").mkString(" "))
-      val resBufferOtherSentence =  bufferOtherSentence.mkString(" ").replaceAll("\"","\\\\'")
+      val resBufferOtherSentence =  bufferOtherSentence.mkString(" ")//.replaceAll("\"","\\\\'")
       IndexApacheLog(bufferIndexLog, resBufferOtherSentence) //.toString//.mkString(" ").toString
   }
-
   /*  ____________________________________________________________  */
   //Parsers for every phrases
 
@@ -94,15 +141,12 @@ class SimpleParser extends RegexParsers {
     override def toString: String = apBuffer.map(ap => s"```{'$ap' : { 'query': '$groupCol', tws: 0, twf: 0}}```").mkString(",")
   }
 
-  case class ParserHelper(str: String) {
-    override def toString: String = s"$str"
-  }
 
   /**
-   * This method a compared res and str, if it is equal => return Success
-   * @param str
-   * @return
-   */
+  * This method a compared res and str, if it is equal => return Success
+  * @param str
+  * @return
+  */
 
   def parseResult(resIndex: Parser[IndexApacheLog], str: String): String = {
     parse(resIndex, str) match {
@@ -115,8 +159,8 @@ class SimpleParser extends RegexParsers {
 
 object SimpleParser {
   def main(args: Array[String]): Unit = {
-    val str = "index=test GET POST col=\"20 ffgg jkm\""
+    val str = """index=test col1= "test value""""
     val simpleParser = new SimpleParser
-    println(simpleParser.parseResult(simpleParser.commonSentence, str))
+    println(simpleParser.parseResult(simpleParser.commonSentenceTwoVariant, str))
   }
 }
