@@ -12,13 +12,19 @@ class SimpleParser extends RegexParsers {
   //terminals  [\s]$
   //Block defs for index expressions
   //Group phrases for indexExpression
-  def `anySentenceWithoutGap` = """\S+""".r ^^ (_.toString)
+  def `anySentenceWithoutGap` = {
+    """[^"'\s]+""".r ^^ (
+      _.toString
+      )
+  }
+
+  def `anySentenceWithoutGapElse` = """\S+""".r ^^ (_.toString)
 
   def `anyWithCompare` = "\\S+\\s?[=<>]".r ^^ (_.toString)
 
   def `index`: Parser[String] = "index\\s?=".r //^^ (_ => "index=") //cases expression with index
 
-  def `index=log` = `index` ~> `anySentenceWithoutGap` ^^ (_.toString)
+  def `index=log` = `index` ~> `anySentenceWithoutGapElse` ^^ (_.toString)
 
   def `indexUniversal`: Parser[String] = "index\\s?=\\s?\\S+".r ^^ { str => {
     parse(`index=log`, str) match {
@@ -30,16 +36,6 @@ class SimpleParser extends RegexParsers {
     }
   }}
 
-  def `anySentenceWithBrackets` = "[\'\"]".r.? ~ rep1(`anySentenceWithoutGap`) ~ "[\'\"]".r.? ^^ {
-    case br1 ~ listSent ~ br2 =>  {
-      val strRes = if (br1.fold("")(str => str.toString) != "" && br2.fold("")(str => str.toString) != "") {
-        listSent.mkString(" ").replaceAll(""""'""", """\'""")
-      } else listSent.mkString(" ")//.replaceAll(""""'""", """\'""")
-      bufferOtherSentence += strRes
-      strRes
-    }
-  }
-
   /**
    *  New Functional
    * @return
@@ -47,7 +43,7 @@ class SimpleParser extends RegexParsers {
   //Boolean expressions
   def `anyBooleanSentence` = "AND|OR|NOT".r ^^ { str => {
     val strRes = if (str == "NOT") s"!(" else str
-    bufferOtherSentence += strRes
+    //bufferOtherSentence += strRes
     strRes
   } }
 
@@ -55,56 +51,91 @@ class SimpleParser extends RegexParsers {
     val strRequest = if (str.contains("\\*")) {
       val tempStr = str.replaceAll("""\*""", """.*""")
       s"_raw rlike \'$tempStr\'"
-    } else s"_raw like \'%$str%\'"
-    bufferOtherSentence += strRequest
+    } else {
+      s"_raw like \\'%$str%\\'"
+    }
+    //println(strRequest)
+    //bufferOtherSentence += strRequest
     strRequest
   } }
 
   def `commonColWithCompare` = """\S+\s?[=<>]""".r ^^ (_.toString)
 
-  def `sentenceInnerBrackets` = `sentenceInnerBracketsBasic` ^^ { str => {
-   val tempStr = s"_raw like \'%$str%\'"//{str.substring(1, str.size - 2)}%\'"
-    bufferOtherSentence += tempStr
-    tempStr
-  }  }
 
-  def `sentenceInnerBracketsBasic` = """"|'""".r ~ rep1(`anySentenceWithoutGap`) ~ """"|'""".r  ^^ {
-    case br1 ~ listSent ~ br2 => listSent.mkString(" ")
-  }
+  def `lazyQuantifierWithBrackets` =
+    """["|'].+?["|']""".r  ^^ {
+      _.replaceAll(""""|'""", """""").trim
+    }
 
-  def `colWithCompareWithBrackets` = `commonColWithCompare` ~ `sentenceInnerBracketsBasic` ^^ {
-    case col ~ innerBr => {
-      val resStr = if (innerBr.contains("""\*""")) {
-        s"$col'${innerBr.replaceAll("""\*""", """.*""")}'"
-      } else if (innerBr.contains("""*""")) {
-        s"${col.substring(0, col.size - 1)} rlike \'${innerBr.replaceAll("""\\\*""", """*""")}\'"
-      } else s"$col\'$innerBr\'"
-      bufferOtherSentence += resStr
+  def `sentenceWithRightBrackets` =
+    """[^"|']+["|']""".r  ^^ {
+      _.toString
+    }
+
+  def `sentenceWithLeftBrackets` =
+    """["|'][^"|'\s]+""".r  ^^ {
+      _.toString
+    }
+
+  /***
+   * Any various colSentence
+   * @return
+   */
+
+  def `sentenceWithCol` = `commonColWithCompare`.? ~ `anyVariantsWithBrackets` ^^ {
+    case colOpt ~ anySent => {
+      val col = colOpt.fold("")(_.toString)
+      val resStr = if (anySent.contains(""".*""")) {
+        s"${col.substring(0, col.length - 1)} rlike $anySent"
+      } else {
+        if (col == "") {
+          s"_raw like \\'%$anySent%\\'"
+        }
+        else s"$col\\'$anySent\\'"
+      }
+      //bufferOtherSentence += resStr
       resStr
     }
   }
 
-  def `colWithCompareWithoutBrackets` = `commonColWithCompare` ~ `anySentenceWithoutGap` ^^ {
-    case col ~ withoutBr => {
-      val resStr = s"$col${withoutBr.replaceAll(""""|'""", """\\'""")}"
-      bufferOtherSentence += resStr
-      resStr
-    }
-  }
+  def `anyVariantsWithBrackets` =
+    `lazyQuantifierWithBrackets` |
+      `sentenceWithRightBrackets` |
+      `sentenceWithLeftBrackets`
 
-  def `simpleSentenceWithoutGap` = `anySentenceWithoutGap` ^^ (str => {
-    bufferOtherSentence += s"$str"
-    str
-  })
+
+  def `commonSentenceWithBrackets` =
+    `anyBooleanSentence` |
+      `anyRequests` |
+      `sentenceWithCol`|
+      `anySentenceWithoutGap`
+
+  def `basicBodySentence` = rep1(`commonSentenceWithBrackets`) ^^ {
+    innerListSentence => {
+      //val col = colOpt.fold("")(_.toString)
+      //val br1 = br1Opt.fold("")(_.toString)
+      //val br2 = br2Opt.fold("")(_.toString)
+      val listSentenceStr = innerListSentence.map(str => {
+        if (str.contains("""\""" + """*""")) {
+          str.replaceAll("""\*""", """.*""")
+        } else if (str.contains("""\\\*""")) {
+          str.replaceAll("""\\\*""", """*""")
+        } else str
+      })
+      /*
+      val resStr = if ((col != "") && listSentenceStr.contains(""".*""")) {
+        s"${col.substring(0, col.size - 1)} rlike $listSentenceStr"
+      } else s"$col$listSentenceStr"
+       */
+      bufferOtherSentence.insertAll(0, listSentenceStr)
+      listSentenceStr
+    }
+
+  }
 
   def `universalSentence` =
     `indexUniversal` |
-      `anyBooleanSentence` |
-      `anyRequests` |
-      `sentenceInnerBrackets` |
-      `colWithCompareWithBrackets` |
-      `colWithCompareWithoutBrackets` |
-      `simpleSentenceWithoutGap`
+      `basicBodySentence` // |
 
   /***
    *
@@ -122,7 +153,7 @@ class SimpleParser extends RegexParsers {
             bufferOtherSentence(x + 1) = s"!(${bufferOtherSentence(x + 1)})"
           }
           i = x
-        } else if (bufferOtherSentence(x).contains("_raw")) {
+        } else if (bufferOtherSentence(x).contains("_raw") && x != 0) {
           if (bufferOtherSentence(x - 1) != "AND" && bufferOtherSentence(x - 1) != "OR") bufferOtherSentence(x) = s"AND ${bufferOtherSentence(x)}"
         }
       }
@@ -159,7 +190,7 @@ class SimpleParser extends RegexParsers {
 
 object SimpleParser {
   def main(args: Array[String]): Unit = {
-    val str = """index=test col1= "test value""""
+    val str = """index=test "русские символы" OR "слово" POST"""
     val simpleParser = new SimpleParser
     println(simpleParser.parseResult(simpleParser.commonSentenceTwoVariant, str))
   }

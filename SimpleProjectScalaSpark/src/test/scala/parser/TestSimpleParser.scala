@@ -153,6 +153,23 @@ class TestSimpleParser extends FunSuite {
     println(testStr)
     assert(testStr == compareStr)
     }
+
+  test("Check methods for SimpleParser class for case test 19") {
+    val simpleParser = new SimpleParser
+    val str = "index=test \"русские символы\" OR \"слово\"  POST"
+    val compareStr = "```{'test' : { 'query': '_raw like \\'%русские символы%\\' OR _raw like \\'%слово%\\' AND _raw like \\'%POST%\\'', tws: 0, twf: 0}}```"
+    val testStr = simpleParser.parseResult(simpleParser.commonSentenceTwoVariant, str)
+    println(testStr)
+    assert(testStr == compareStr)
+  }
+  test("Check methods for SimpleParser class for case test 20") {
+    val simpleParser = new SimpleParser
+    val str = "index=test \"русские символы\" OR \"слово\"  POST"
+    val compareStr = "```{'test' : { 'query': '_raw like \\'%русские символы%\\' OR _raw like \\'%слово%\\' AND _raw like \\'%POST%\\'', tws: 0, twf: 0}}```"
+    val testStr = simpleParser.parseResult(simpleParser.commonSentenceTwoVariant, str)
+    println(testStr)
+    assert(testStr == compareStr)
+  }
   /*
      */
 
