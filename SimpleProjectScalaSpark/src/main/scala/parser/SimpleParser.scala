@@ -5,7 +5,6 @@ import scala.util.parsing.combinator._
 
 class SimpleParser extends RegexParsers {
 
-  var bufferPreRez = mutable.Buffer[String]()
   var bufferIndexLog = mutable.Buffer[String]()
   var bufferOtherSentence = mutable.Buffer[String]()
 
@@ -14,6 +13,12 @@ class SimpleParser extends RegexParsers {
   //Group phrases for indexExpression
   def `anySentenceWithoutGap` = {
     """[^"'\s]+""".r ^^ (
+      _.toString
+      )
+  }
+
+  def `anySentenceWithColWithoutGap` = {
+    """[^\s]+""".r ^^ (
       _.toString
       )
   }
@@ -43,19 +48,16 @@ class SimpleParser extends RegexParsers {
   //Boolean expressions
   def `anyBooleanSentence` = "AND|OR|NOT".r ^^ { str => {
     val strRes = if (str == "NOT") s"!(" else str
-    //bufferOtherSentence += strRes
     strRes
   } }
 
   def `anyRequests` = "\\*?G\\*?E\\*?T\\*?+|\\*?P\\*?O\\*?S\\*?T\\*?+".r ^^ { str => {
-    val strRequest = if (str.contains("\\*")) {
+    val strRequest = if (str.contains("*")) {
       val tempStr = str.replaceAll("""\*""", """.*""")
-      s"_raw rlike \'$tempStr\'"
+      s"_raw rlike \\'$tempStr\\'"
     } else {
       s"_raw like \\'%$str%\\'"
     }
-    //println(strRequest)
-    //bufferOtherSentence += strRequest
     strRequest
   } }
 
@@ -64,8 +66,13 @@ class SimpleParser extends RegexParsers {
 
   def `lazyQuantifierWithBrackets` =
     """["|'].+?["|']""".r  ^^ {
-      _.replaceAll(""""|'""", """""").trim
+      _.toString//replaceAll(""""|'""", """\""").trim
     }
+
+  def `lazyQuantifierInnerShieldedBrackets` =
+    """["|'][^\\"|'].+?[^\\"|']["|']""".r ^^ { str => {
+      str//.substring(1, str.length - 1)
+    } }
 
   def `sentenceWithRightBrackets` =
     """[^"|']+["|']""".r  ^^ {
@@ -85,24 +92,39 @@ class SimpleParser extends RegexParsers {
   def `sentenceWithCol` = `commonColWithCompare`.? ~ `anyVariantsWithBrackets` ^^ {
     case colOpt ~ anySent => {
       val col = colOpt.fold("")(_.toString)
-      val resStr = if (anySent.contains(""".*""")) {
-        s"${col.substring(0, col.length - 1)} rlike $anySent"
-      } else {
-        if (col == "") {
-          s"_raw like \\'%$anySent%\\'"
+      val resStr = if (col.contains("index")) {
+        parse(`index=log`, s"$col$anySent") match {
+          case Success(result, _) => {
+            bufferIndexLog += result
+            result
+          }
+          case failure: NoSuccess => scala.sys.error(failure.msg)
         }
-        else s"$col\\'$anySent\\'"
+        ""
+      } else {
+        if (anySent.contains("""\*""")) {
+          s"$col\'${anySent.replaceAll("""\\\*""", """*""").replaceAll(""""""", """""")}\'"
+        } else if (anySent.contains("""*""")) {
+          s"${col.substring(0, col.length - 1)} rlike \\'${anySent.replaceAll("""\*""", """.*""").replaceAll(""""""", """""")}\\'"
+        } else {
+          if (col == "") {
+            s"_raw like \\'%${anySent.substring(1, anySent.length - 1)}%\\'"
+          }
+          else {
+            "%s%s".format(col, anySent.replaceAll("(\"|\')", """\\'"""))
+          }
+        }
       }
-      //bufferOtherSentence += resStr
       resStr
     }
   }
 
   def `anyVariantsWithBrackets` =
-    `lazyQuantifierWithBrackets` |
+    `lazyQuantifierInnerShieldedBrackets` |
+      `lazyQuantifierWithBrackets` |
       `sentenceWithRightBrackets` |
-      `sentenceWithLeftBrackets`
-
+      `sentenceWithLeftBrackets` |
+      `anySentenceWithColWithoutGap`
 
   def `commonSentenceWithBrackets` =
     `anyBooleanSentence` |
@@ -112,33 +134,19 @@ class SimpleParser extends RegexParsers {
 
   def `basicBodySentence` = rep1(`commonSentenceWithBrackets`) ^^ {
     innerListSentence => {
-      //val col = colOpt.fold("")(_.toString)
-      //val br1 = br1Opt.fold("")(_.toString)
-      //val br2 = br2Opt.fold("")(_.toString)
       val listSentenceStr = innerListSentence.map(str => {
-        if (str.contains("""\""" + """*""")) {
-          str.replaceAll("""\*""", """.*""")
-        } else if (str.contains("""\\\*""")) {
-          str.replaceAll("""\\\*""", """*""")
-        } else str
+        str
       })
-      /*
-      val resStr = if ((col != "") && listSentenceStr.contains(""".*""")) {
-        s"${col.substring(0, col.size - 1)} rlike $listSentenceStr"
-      } else s"$col$listSentenceStr"
-       */
       bufferOtherSentence.insertAll(0, listSentenceStr)
       listSentenceStr
     }
-
   }
 
   def `universalSentence` =
-    `indexUniversal` |
-      `basicBodySentence` // |
+  `indexUniversal` |
+    `basicBodySentence`
 
   /***
-   *
    * @return
    */
 
@@ -160,18 +168,16 @@ class SimpleParser extends RegexParsers {
       if (i != -1) bufferOtherSentence.remove(i)
       println(bufferIndexLog.mkString(" "))
       println(bufferOtherSentence.mkString(" "))
-      println(bufferOtherSentence.mkString("").split("").size) //.split(" ").mkString(" "))
-      val resBufferOtherSentence =  bufferOtherSentence.mkString(" ")//.replaceAll("\"","\\\\'")
+ //     println(bufferOtherSentence.last) //.split(" ").mkString(" "))
+      val resBufferOtherSentence =  bufferOtherSentence.map(_.trim).mkString(" ").trim//.replaceAll("\"","\\\\'")
       IndexApacheLog(bufferIndexLog, resBufferOtherSentence) //.toString//.mkString(" ").toString
   }
   /*  ____________________________________________________________  */
-  //Parsers for every phrases
 
   case class IndexApacheLog(bufferIndexLogs: mutable.Buffer[String], groupCol: String) {
     val apBuffer = bufferIndexLogs.map(_.stripPrefix("\"").stripSuffix("\""))
     override def toString: String = apBuffer.map(ap => s"```{'$ap' : { 'query': '$groupCol', tws: 0, twf: 0}}```").mkString(",")
   }
-
 
   /**
   * This method a compared res and str, if it is equal => return Success
@@ -190,7 +196,7 @@ class SimpleParser extends RegexParsers {
 
 object SimpleParser {
   def main(args: Array[String]): Unit = {
-    val str = """index=test "русские символы" OR "слово" POST"""
+    val str = "GET AND POST index= test"
     val simpleParser = new SimpleParser
     println(simpleParser.parseResult(simpleParser.commonSentenceTwoVariant, str))
   }
