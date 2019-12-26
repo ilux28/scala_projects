@@ -5,31 +5,39 @@ import scala.util.parsing.combinator._
 
 class SimpleParser extends RegexParsers {
 
+  /***
+   * Вспомогательные массивы, обработка которых, пойдет в результат
+   */
+
   var bufferIndexLog = mutable.Buffer[String]()
   var bufferOtherSentence = mutable.Buffer[String]()
 
-  //terminals  [\s]$
-  //Block defs for index expressions
-  //Group phrases for indexExpression
-  def `anySentenceWithoutGap` = {
-    """[^"'\s]+""".r ^^ (
-      _.toString
-      )
-  }
+  /***
+   * ^^ документируется как «парсер комбинатор для применения функции».
+   * Если парсинг слева от ^^ успешен, выполняется функция справа.
+   * Если метод `anyMethod` возвращает Parser типа String, то функция справа от ^^ должна возвращать String.
+   */
 
-  def `anySentenceWithColWithoutGap` = {
-    """[^\s]+""".r ^^ (
-      _.toString
-      )
-  }
+  //-------------------------------------------------------------------//
+
+
+  /***
+   * Набор простейших элементов для парсинга - типа токены
+   * И составленные из них более сложные методы - конструирование из токенов
+   */
+
+  def `anySentenceWithoutGap` = """[^"'\s]+""".r ^^ ( _.toString )
+
+  def `anySentenceWithColWithoutGap` = """[^\s]+""".r ^^ ( _.toString )
 
   def `anySentenceWithoutGapElse` = """\S+""".r ^^ (_.toString)
 
-  def `anyWithCompare` = "\\S+\\s?[=<>]".r ^^ (_.toString)
 
-  def `index`: Parser[String] = "index\\s?=".r //^^ (_ => "index=") //cases expression with index
-
-  def `index=log` = `index` ~> `anySentenceWithoutGapElse` ^^ (_.toString)
+  /**
+   * Парсит выражения вида "index\\s?=\\s?\\S+".r
+   * и закидывает положительный результат в bufferIndexLog,
+   * отвечающий за количество выдаваемых json и содержания их заголовков
+   */
 
   def `indexUniversal`: Parser[String] = "index\\s?=\\s?\\S+".r ^^ { str => {
     parse(`index=log`, str) match {
@@ -41,15 +49,21 @@ class SimpleParser extends RegexParsers {
     }
   }}
 
+  def `index`: Parser[String] = "index\\s?=".r //^^ (_ => "index=") //cases expression with index
+
+  def `index=log` = `index` ~> `anySentenceWithoutGapElse` ^^ (_.toString)
+
   /**
-   *  New Functional
-   * @return
+   * Для парсинга булевых выражений вида "AND|OR|NOT"
    */
-  //Boolean expressions
   def `anyBooleanSentence` = "AND|OR|NOT".r ^^ { str => {
     val strRes = if (str == "NOT") s"!(" else str
     strRes
   } }
+
+  /**
+   * Для парсинга выражений-запросов вида "\\*?G\\*?E\\*?T\\*?+|\\*?P\\*?O\\*?S\\*?T\\*?+"
+   */
 
   def `anyRequests` = "\\*?G\\*?E\\*?T\\*?+|\\*?P\\*?O\\*?S\\*?T\\*?+".r ^^ { str => {
     val strRequest = if (str.contains("*")) {
@@ -61,33 +75,31 @@ class SimpleParser extends RegexParsers {
     strRequest
   } }
 
+  /**
+   * Группа функций для парсинга различных выражений:
+   * 1. Некоторого набора символов со знаком сравнения на конце, вида """\S+\s?[=<>]""".r
+   * 2. Некоторого набора символов заключенных в двойных или одинарных кавычках, вида """["|'].+?["|']""".r
+   * 3. Некоторого набора символов заключенных в двойных или одинарных кавычках не содержащего их внутри, вида """["|'][^\\"|'].+?[^\\"|']["|']""".r
+   * 4. Некоторого набора символов начинающийся не с кавычек и заканчивающийся ими, вида """[^"|']+["|']""".r
+   * 5. Некоторого набора символов начинающийся с кавычек и заканчивающийся не кавычками, вида """["|'][^"|'\s]+""".r
+   */
   def `commonColWithCompare` = """\S+\s?[=<>]""".r ^^ (_.toString)
 
+  def `lazyQuantifierWithBrackets` = """["|'].+?["|']""".r  ^^ { _.toString }
 
-  def `lazyQuantifierWithBrackets` =
-    """["|'].+?["|']""".r  ^^ {
-      _.toString//replaceAll(""""|'""", """\""").trim
-    }
+  def `lazyQuantifierInnerShieldedBrackets` = """["|'][^\\"|'].+?[^\\"|']["|']""".r ^^ { _.toString }
 
-  def `lazyQuantifierInnerShieldedBrackets` =
-    """["|'][^\\"|'].+?[^\\"|']["|']""".r ^^ { str => {
-      str//.substring(1, str.length - 1)
-    } }
+  def `sentenceWithRightBrackets` = """[^"|']+["|']""".r  ^^ {  _.toString  }
 
-  def `sentenceWithRightBrackets` =
-    """[^"|']+["|']""".r  ^^ {
-      _.toString
-    }
-
-  def `sentenceWithLeftBrackets` =
-    """["|'][^"|'\s]+""".r  ^^ {
-      _.toString
-    }
+  def `sentenceWithLeftBrackets` = """["|'][^"|'\s]+""".r  ^^ { _.toString }
 
   /***
-   * Any various colSentence
+   * Метод для парсинга всех остальных выражений для возможных вариантов вида 'col1='20*'
+   *
    * @return
    */
+
+//TODO требует рефракторинга(скоро) 26.12.19
 
   def `sentenceWithCol` = `commonColWithCompare`.? ~ `anyVariantsWithBrackets` ^^ {
     case colOpt ~ anySent => {
@@ -96,7 +108,6 @@ class SimpleParser extends RegexParsers {
         parse(`index=log`, s"$col$anySent") match {
           case Success(result, _) => {
             bufferIndexLog += result
-            result
           }
           case failure: NoSuccess => scala.sys.error(failure.msg)
         }
@@ -118,6 +129,12 @@ class SimpleParser extends RegexParsers {
       resStr
     }
   }
+
+  /***
+   * Методы для парсинга выражений "высокого уровня"
+   * (Обратите внимание на очередность - порядок имеет значение: сначала проверятся на соответствие первый, если соответствие
+   * не найдено, проверяем следующий)
+   */
 
   def `anyVariantsWithBrackets` =
     `lazyQuantifierInnerShieldedBrackets` |
@@ -147,11 +164,12 @@ class SimpleParser extends RegexParsers {
     `basicBodySentence`
 
   /***
-   * @return
+   * Метод выдающий результат на вснове подготовленных данных из вспомогательных массивов
    */
+      //TODO Возможно тоже требует рефракторинга 26.12.19
 
   def commonSentenceTwoVariant = rep1(`universalSentence`) ^^ {
-    listSentence => //listSentence//.foreach { println(_) }
+    listSentence =>
       var i = -1
       for (x <- bufferOtherSentence.indices) {
         if (bufferOtherSentence(x) == "!(") {
@@ -166,13 +184,13 @@ class SimpleParser extends RegexParsers {
         }
       }
       if (i != -1) bufferOtherSentence.remove(i)
-      println(bufferIndexLog.mkString(" "))
-      println(bufferOtherSentence.mkString(" "))
- //     println(bufferOtherSentence.last) //.split(" ").mkString(" "))
       val resBufferOtherSentence =  bufferOtherSentence.map(_.trim).mkString(" ").trim//.replaceAll("\"","\\\\'")
       IndexApacheLog(bufferIndexLog, resBufferOtherSentence) //.toString//.mkString(" ").toString
   }
-  /*  ____________________________________________________________  */
+
+  /***
+   * Case class в методе @toString формирующий результирующий JSON
+   */
 
   case class IndexApacheLog(bufferIndexLogs: mutable.Buffer[String], groupCol: String) {
     val apBuffer = bufferIndexLogs.map(_.stripPrefix("\"").stripSuffix("\""))
@@ -180,7 +198,7 @@ class SimpleParser extends RegexParsers {
   }
 
   /**
-  * This method a compared res and str, if it is equal => return Success
+  * This method a parsed res and str, if it is equal => return Success
   * @param str
   * @return
   */
